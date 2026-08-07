@@ -24,6 +24,14 @@ const HighlightSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const SpecificationSchema = new mongoose.Schema(
+  {
+    key: { type: String, required: true },
+    value: { type: String, required: true },
+  },
+  { _id: false }
+);
+
 const VariantSchema = new mongoose.Schema(
   {
     label: { type: String, required: true }, // e.g., '250g', '1kg'
@@ -45,8 +53,13 @@ const ProductSchema = new mongoose.Schema(
     title: String,
     sku: { type: String, trim: true },
     name: { type: String, required: true },
+    price: { type: Number, default: 0 },
+    selling_price: { type: Number, default: 0 },
+    quantity: { type: Number, default: 0 },
     description: String,
+    selling_price_link: String,
     key_highlights: { type: [HighlightSchema], default: [] },
+    specifications: { type: [SpecificationSchema], default: [] },
     catagory_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Catagories",
@@ -55,6 +68,10 @@ const ProductSchema = new mongoose.Schema(
     ingredients: { type: [IngredientSchema], default: [] },
     nutritions: { type: [NutritionSchema], default: [] },
     variants: { type: [VariantSchema], default: [] },
+    product_image: { type: [String], default: [] },
+    image_public_ids: { type: [String], default: [] },
+    video_url: { type: String, default: "" },
+    video_public_id: { type: String, default: "" },
     cod_available: { type: Boolean, default: false },
     status: {
       type: String,

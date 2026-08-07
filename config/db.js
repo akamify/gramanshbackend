@@ -23,9 +23,9 @@ function resolveDatabaseName() {
 }
 
 export const connectDB = async () => {
-  const uriRaw = process.env.MONGO_URI;
+  const uriRaw = process.env.MONGO_URI || process.env.MONGODB_URI;
   if (!uriRaw) {
-    throw new Error("MONGO_URI not set in environment");
+    throw new Error("MONGO_URI or MONGODB_URI not set in environment");
   }
   const dbName = resolveDatabaseName();
   const uri = stripDatabasePathFromMongoUri(uriRaw.trim());

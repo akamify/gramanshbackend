@@ -524,23 +524,40 @@ const parseArrayField = (value) => {
     .filter(Boolean);
 };
 
-const parseHighlights = (value) => {
+const normalizeKeyValueRows = (rows) =>
+  rows
+    .map((item) => ({
+      key: String(item?.key || "").trim(),
+      value: String(item?.value || "").trim(),
+    }))
+    .filter((item) => item.key && item.value);
+
+const parseKeyValueField = (value) => {
   if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return normalizeKeyValueRows(value);
+  }
+
   try {
     const parsed = JSON.parse(value);
     if (Array.isArray(parsed)) {
-      return parsed
-        .map((item) => ({
-          key: String(item.key || "").trim(),
-          value: String(item.value || "").trim(),
-        }))
-        .filter((h) => h.key && h.value);
+      return normalizeKeyValueRows(parsed);
+    }
+    if (parsed && typeof parsed === "object") {
+      return Object.entries(parsed).map(([key, pairValue]) => ({
+        key: String(key || "").trim(),
+        value: String(pairValue || "").trim(),
+      })).filter((item) => item.key && item.value);
     }
   } catch (_) {
     /* fall back */
   }
   return [];
 };
+
+const parseHighlights = (value) => parseKeyValueField(value);
+const parseSpecifications = (value) => parseKeyValueField(value);
 
 const parseWeightVariants = (value) => {
   if (!value) return [];
@@ -679,8 +696,7 @@ const stageFromLabel = (label = "") => {
 };
 
 const DESCRIPTION_MAX_LENGTH = 1200;
-const SPECIFICATIONS_MIN = 6;
-const SPECIFICATIONS_MAX = 10;
+const DETAIL_ROWS_MAX = 8;
 const SKU_PATTERN = /^[A-Z]{2}-\d{3}$/;
 
 const descriptionTextLength = (value) =>
@@ -747,24 +763,13 @@ const uploadProduct = async (req, res) => {
       return res.status(400).json({ status: false, message: "Valid categoryId is required. Create/select a category before uploading products." });
     }
 
-    let specsArr = [];
-    let highlightsArr = [];
-    if (specification) {
-      try {
-        const parsed = JSON.parse(specification);
-        specsArr = Object.entries(parsed).map(([key, value]) => ({ key, value }));
-      } catch {
-        return res.status(400).json({ message: "Invalid specification JSON" });
-      }
-      if (specsArr.length < SPECIFICATIONS_MIN || specsArr.length > SPECIFICATIONS_MAX) {
-        return res.status(400).json({ status: false, message: `specifications must have ${SPECIFICATIONS_MIN}-${SPECIFICATIONS_MAX} items` });
-      }
+    const specsArr = specification ? parseSpecifications(specification) : [];
+    const highlightsArr = key_highlights ? parseHighlights(key_highlights) : [];
+    if (specification && specsArr.length > DETAIL_ROWS_MAX) {
+      return res.status(400).json({ status: false, message: `specifications can have up to ${DETAIL_ROWS_MAX} items` });
     }
-    if (key_highlights) {
-      highlightsArr = parseHighlights(key_highlights);
-      if (highlightsArr.length < 6 || highlightsArr.length > 10) {
-        return res.status(400).json({ status: false, message: "key_highlights must have 6-10 items" });
-      }
+    if (key_highlights && highlightsArr.length > DETAIL_ROWS_MAX) {
+      return res.status(400).json({ status: false, message: `key_highlights can have up to ${DETAIL_ROWS_MAX} items` });
     }
 
     // Parse weight variants
@@ -854,8 +859,8 @@ const uploadProduct = async (req, res) => {
       video_public_id: videoPublicId,
       variants: weightVariants,
       sku,
-      ingredients: ingredients ? JSON.parse(ingredients) : [],
-      nutritions: nutritions ? JSON.parse(nutritions) : [],
+      ingredients: parseKeyValueField(ingredients),
+      nutritions: parseKeyValueField(nutritions),
       cod_available: parseBoolean(req.body.cod_available, false),
       status,
       draft_stage: draft_stage || (status === "published" ? "complete" : "details"),
@@ -931,34 +936,18 @@ const createDraftProduct = async (req, res) => {
       !category && catagory ? await Catagories.findOne({ name: catagory.trim() }) : null;
     const finalCategory = category || fallbackCategory || null;
 
-    let specsArr = [];
-    if (specification) {
-      try {
-        const parsed = JSON.parse(specification);
-        specsArr = Object.entries(parsed).map(([key, value]) => ({
-          key,
-          value,
-        }));
-      } catch {
-        return res.status(400).json({ message: "Invalid specification JSON" });
-      }
-      // Only validate specifications length if a new, non-empty `specification`
-      // payload was provided in the request body. This matches the upload flow
-      // where specs are only enforced when explicitly sent by the client.
-      if (specification) {
-        if (specsArr.length < SPECIFICATIONS_MIN || specsArr.length > SPECIFICATIONS_MAX) {
-          return res.status(400).json({
-            status: false,
-            message: `specifications must have ${SPECIFICATIONS_MIN}-${SPECIFICATIONS_MAX} items`,
-          });
-        }
-      }
+    const specsArr = specification ? parseSpecifications(specification) : [];
+    if (specification && specsArr.length > DETAIL_ROWS_MAX) {
+      return res.status(400).json({
+        status: false,
+        message: `specifications can have up to ${DETAIL_ROWS_MAX} items`,
+      });
     }
-    let highlightsArr = parseHighlights(key_highlights);
-    if (highlightsArr.length && (highlightsArr.length < 6 || highlightsArr.length > 10)) {
+    const highlightsArr = key_highlights ? parseHighlights(key_highlights) : [];
+    if (key_highlights && highlightsArr.length > DETAIL_ROWS_MAX) {
       return res
         .status(400)
-        .json({ status: false, message: "key_highlights must have 6-10 items" });
+        .json({ status: false, message: `key_highlights can have up to ${DETAIL_ROWS_MAX} items` });
     }
 
     // Validate weight variants
@@ -999,8 +988,8 @@ const createDraftProduct = async (req, res) => {
       catagory_id: finalCategory?._id,
       specifications: specsArr,
       key_highlights: highlightsArr,
-      ingredients: ingredients ? JSON.parse(ingredients) : [],
-      nutritions: nutritions ? JSON.parse(nutritions) : [],
+      ingredients: parseKeyValueField(ingredients),
+      nutritions: parseKeyValueField(nutritions),
       draft_stage: draft_stage || stageFromLabel(draft_stage) || "details",
       status: "draft",
     });
@@ -1151,25 +1140,23 @@ const updateProduct = async (req, res) => {
       resolvedCategoryId: categoryData?._id ? String(categoryData._id) : "",
     });
 
-    let specsArr = product.specifications || [];
-    let highlightsArr = product.key_highlights || [];
-    if (specification) {
-      try {
-        const parsed = JSON.parse(specification);
-        specsArr = Object.entries(parsed).map(([key, value]) => ({
-          key,
-          value,
-        }));
-      } catch {
-        return res.status(400).json({ message: "Invalid specification JSON" });
-      }
-    }
-    if (key_highlights) {
-      highlightsArr = parseHighlights(key_highlights);
-      if (highlightsArr.length < 6 || highlightsArr.length > 10) {
+    let specsArr = Array.isArray(product.specifications) ? product.specifications : [];
+    let highlightsArr = Array.isArray(product.key_highlights) ? product.key_highlights : [];
+    if (specification !== undefined) {
+      specsArr = parseSpecifications(specification);
+      if (specsArr.length > DETAIL_ROWS_MAX) {
         return res.status(400).json({
           status: false,
-          message: "key_highlights must have 6-10 items",
+          message: `specifications can have up to ${DETAIL_ROWS_MAX} items`,
+        });
+      }
+    }
+    if (key_highlights !== undefined) {
+      highlightsArr = parseHighlights(key_highlights);
+      if (highlightsArr.length > DETAIL_ROWS_MAX) {
+        return res.status(400).json({
+          status: false,
+          message: `key_highlights can have up to ${DETAIL_ROWS_MAX} items`,
         });
       }
     }
@@ -1359,14 +1346,6 @@ const updateProduct = async (req, res) => {
         });
       }
 
-      if (specification) {
-        if (specsArr.length < SPECIFICATIONS_MIN || specsArr.length > SPECIFICATIONS_MAX) {
-          return res.status(400).json({
-            status: false,
-            message: `specifications must have ${SPECIFICATIONS_MIN}-${SPECIFICATIONS_MAX} items`,
-          });
-        }
-      }
     }
 
     const effectivePrice = hasPrice ? parsedPrice : Number(product.price);
@@ -1480,8 +1459,8 @@ const updateProduct = async (req, res) => {
       }
       return [];
     }
-    if (ingredients !== undefined) product.ingredients = safeParseArray(ingredients);
-    if (nutritions !== undefined) product.nutritions = safeParseArray(nutritions);
+    if (ingredients !== undefined) product.ingredients = parseKeyValueField(ingredients);
+    if (nutritions !== undefined) product.nutritions = parseKeyValueField(nutritions);
     // Apply weight variants if provided
     if (weightVariants.length) {
       applyWeightVariantsToDoc(product, weightVariants);
@@ -1511,8 +1490,8 @@ const updateProduct = async (req, res) => {
 
         product = latest;
         applyProductMutations(product);
-        if (ingredients !== undefined) product.ingredients = safeParseArray(ingredients);
-        if (nutritions !== undefined) product.nutritions = safeParseArray(nutritions);
+        if (ingredients !== undefined) product.ingredients = parseKeyValueField(ingredients);
+        if (nutritions !== undefined) product.nutritions = parseKeyValueField(nutritions);
         if (weightVariants.length) {
           applyWeightVariantsToDoc(product, weightVariants);
           if (imageFiles.length === 0 && removedImageUrls.length === 0 && req.body.removeImages !== "true") {
@@ -1835,25 +1814,23 @@ const updateDraft = async (req, res) => {
       return res.status(400).json({ status: false, message: "Valid categoryId is required" });
     }
 
-    let specsArr = draft.specifications || [];
-    let highlightsArr = draft.key_highlights || [];
-    if (specification) {
-      try {
-        const parsed = JSON.parse(specification);
-        specsArr = Object.entries(parsed).map(([key, value]) => ({
-          key,
-          value,
-        }));
-      } catch {
-        return res.status(400).json({ message: "Invalid specification JSON" });
-      }
-    }
-    if (key_highlights) {
-      highlightsArr = parseHighlights(key_highlights);
-      if (highlightsArr.length < 6 || highlightsArr.length > 10) {
+    let specsArr = Array.isArray(draft.specifications) ? draft.specifications : [];
+    let highlightsArr = Array.isArray(draft.key_highlights) ? draft.key_highlights : [];
+    if (specification !== undefined) {
+      specsArr = parseSpecifications(specification);
+      if (specsArr.length > DETAIL_ROWS_MAX) {
         return res.status(400).json({
           status: false,
-          message: "key_highlights must have 6-10 items",
+          message: `specifications can have up to ${DETAIL_ROWS_MAX} items`,
+        });
+      }
+    }
+    if (key_highlights !== undefined) {
+      highlightsArr = parseHighlights(key_highlights);
+      if (highlightsArr.length > DETAIL_ROWS_MAX) {
+        return res.status(400).json({
+          status: false,
+          message: `key_highlights can have up to ${DETAIL_ROWS_MAX} items`,
         });
       }
     }
@@ -1996,8 +1973,8 @@ const updateDraft = async (req, res) => {
     draft.key_highlights = highlightsArr;
     draft.video_url = videoUrl;
     draft.video_public_id = videoPublicId;
-    if (ingredients !== undefined) draft.ingredients = ingredients ? JSON.parse(ingredients) : [];
-    if (nutritions !== undefined) draft.nutritions = nutritions ? JSON.parse(nutritions) : [];
+    if (ingredients !== undefined) draft.ingredients = parseKeyValueField(ingredients);
+    if (nutritions !== undefined) draft.nutritions = parseKeyValueField(nutritions);
     // Apply weight variants if provided
     if (weightVariants.length) {
       applyWeightVariantsToDoc(draft, weightVariants);
