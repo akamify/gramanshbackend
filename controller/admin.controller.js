@@ -127,7 +127,7 @@ const buildDefaultSiteSettings = () => ({
     "This is an automated message from StreetRiot commerce engine.",
   logoUrl: getEnvString("NEXT_PUBLIC_BRAND_LOGO_URL", "NEXT_PUBLIC_LOGO_URL"),
   logoPublicId: "",
-  currencySymbol: getEnvString("NEXT_PUBLIC_CURRENCY") || "$",
+  currencySymbol: getEnvString("NEXT_PUBLIC_CURRENCY") || "₹",
   instagramUrl: getEnvString("NEXT_PUBLIC_INSTAGRAM_URL"),
   instagramHandle: normalizeInstagramHandle(
     getEnvString("NEXT_PUBLIC_INSTAGRAM_HANDLE") || "kinetic_riot"
@@ -604,10 +604,11 @@ const applyWeightVariantsToDoc = (doc, wvs) => {
   // total quantity = sum of all variant stocks
   const totalQty = wvs.reduce((sum, v) => sum + (Number.isFinite(v.stock) ? v.stock : 0), 0);
   doc.quantity = totalQty;
-  // Use first variant price as default if not set
-  if (wvs.length > 0 && !doc.price) {
-    doc.price = wvs[0].price;
-    doc.selling_price = wvs[0].selling_price || wvs[0].price;
+  // Keep top-level pricing in sync with the lead variant so admin lists/edit
+  // flows do not drift from variant-backed products.
+  if (wvs.length > 0) {
+    doc.price = Number(wvs[0].price || 0);
+    doc.selling_price = Number(wvs[0].selling_price || wvs[0].price || 0);
   }
 };
 
@@ -1348,10 +1349,14 @@ const updateProduct = async (req, res) => {
 
     }
 
-    const effectivePrice = hasPrice ? parsedPrice : Number(product.price);
-    const effectiveSellingPrice = hasSellingPrice
-      ? parsedSellingPrice
-      : Number(product.selling_price);
+    const effectivePrice = weightVariants.length
+      ? (hasPrice ? parsedPrice : Number(weightVariants[0].price || product.price || 0))
+      : (hasPrice ? parsedPrice : Number(product.price));
+    const effectiveSellingPrice = weightVariants.length
+      ? (hasSellingPrice
+        ? parsedSellingPrice
+        : Number((weightVariants[0].selling_price ?? weightVariants[0].price) || product.selling_price || 0))
+      : (hasSellingPrice ? parsedSellingPrice : Number(product.selling_price));
     if (Number.isFinite(effectivePrice) && Number.isFinite(effectiveSellingPrice)) {
       if (!(effectiveSellingPrice < effectivePrice)) {
         return res

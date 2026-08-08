@@ -23,10 +23,42 @@ const allowedOrigins = [
     .map((v) => v.trim())
     .filter(Boolean)),
 ].filter(Boolean);
+const allowedOriginSuffixes = String(process.env.FRONTEND_DOMAIN_SUFFIXES || "")
+  .split(",")
+  .map((v) => v.trim())
+  .filter(Boolean);
+
+const parseOrigin = (value) => {
+  try {
+    return new URL(String(value || "").trim());
+  } catch {
+    return null;
+  }
+};
+
+const isSuffixOriginAllowed = (origin) => {
+  const requestUrl = parseOrigin(origin);
+  if (!requestUrl) return false;
+
+  return allowedOriginSuffixes.some((entry) => {
+    const allowedUrl = parseOrigin(entry);
+    if (!allowedUrl) return false;
+    if (allowedUrl.protocol !== requestUrl.protocol) return false;
+
+    const allowedHost = allowedUrl.hostname.toLowerCase();
+    const requestHost = requestUrl.hostname.toLowerCase();
+    return (
+      requestHost === allowedHost ||
+      requestHost.endsWith(`.${allowedHost}`)
+    );
+  });
+};
+
 const isOriginAllowed = (origin) => {
   if (!origin) return true;
-  if (!allowedOrigins.length) return false;
-  return allowedOrigins.includes(origin);
+  if (allowedOrigins.includes(origin)) return true;
+  if (isSuffixOriginAllowed(origin)) return true;
+  return false;
 };
 app.use((req, res, next) => {
   const requestOrigin = String(req.headers.origin || "");

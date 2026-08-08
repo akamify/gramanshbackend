@@ -355,7 +355,8 @@ const validateCartItemsStock = async (items = []) => {
     const pid = Number(item?.product_id);
     if (!pid) continue;
     const size = String(item?.size || "");
-    const key = `${pid}|${normalizeVariantKey(size)}`;
+    const color = String(item?.color || "");
+    const key = `${pid}|${normalizeVariantKey(size)}|${normalizeVariantKey(color)}`;
     const qty = Math.max(1, Number(item?.qty ?? item?.quantity ?? 1));
     totalByKey.set(key, (totalByKey.get(key) || 0) + qty);
   }

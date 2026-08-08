@@ -4,7 +4,7 @@ const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
 export async function sendBrevoEmail({
   apiKey,
   fromEmail,
-  fromName = "Amila Gold",
+  fromName = "Gram Ansh",
   toEmail,
   toName = "",
   subject,
@@ -66,7 +66,7 @@ export async function sendSmtpMail({
   // Use Brevo API instead of SMTP
   const apiKey = process.env.BREVO_API_KEY;
   const fromEmail = process.env.BREVO_FROM_EMAIL || from;
-  const fromName = process.env.BREVO_FROM_NAME || "Amila Gold";
+  const fromName = process.env.BREVO_FROM_NAME || "Gram Ansh";
 
   if (!apiKey) {
     throw new Error("BREVO_API_KEY not configured");

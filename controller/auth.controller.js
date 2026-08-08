@@ -9,14 +9,21 @@ loadEnv();
 const otpStore = new Map(); // email -> { code, expires }
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-const brevoApiKey = process.env.BREVO_API_KEY;
-const brevoFromEmail = process.env.BREVO_FROM_EMAIL;
-const brevoFromName = process.env.BREVO_FROM_NAME || "Amila Gold";
+function getBrevoConfig() {
+  return {
+    apiKey: process.env.BREVO_API_KEY,
+    fromEmail: process.env.BREVO_FROM_EMAIL,
+    fromName: process.env.BREVO_FROM_NAME || "Gram Ansh",
+  };
+}
 
 export const sendOtp = async (req, res) => {
   try {
     const { email } = req.body || {};
     if (!email) return res.status(400).json({ message: "Email required" });
+
+    const { apiKey: brevoApiKey, fromEmail: brevoFromEmail, fromName: brevoFromName } =
+      getBrevoConfig();
 
     if (!brevoApiKey || !brevoFromEmail) {
       return res
@@ -28,17 +35,17 @@ export const sendOtp = async (req, res) => {
     const expires = Date.now() + OTP_TTL_MS;
     otpStore.set(email, { code, expires });
 
-    const subject = "Your Amila Gold Login Code";
-    const textContent = `Your OTP is ${code}. It expires in 10 minutes.`;
+    const subject = "Your Gram Ansh Login Code";
+    const textContent = `Your Gram Ansh login code is ${code}. It expires in 10 minutes.`;
     const htmlContent = `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #2d5016;">Your Login Code</h2>
-        <p>Enter the following code to sign in to your Amila Gold account:</p>
+        <h2 style="color: #2d5016;">Your Gram Ansh Login Code</h2>
+        <p>Enter the following verification code to sign in to your Gram Ansh account:</p>
         <div style="background: #f5f5f5; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 8px; border-radius: 8px; margin: 20px 0;">
           ${code}
         </div>
-        <p>This code expires in 10 minutes.</p>
-        <p style="color: #666; font-size: 12px;">If you didn't request this code, you can safely ignore this email.</p>
+        <p>This verification code expires in 10 minutes.</p>
+        <p style="color: #666; font-size: 12px;">If you didn't request this login code, you can safely ignore this email.</p>
       </div>
     `;
 
