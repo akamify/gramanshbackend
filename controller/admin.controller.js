@@ -41,6 +41,7 @@ import {
 } from "../utils/productStockNotifications.js";
 import { createAdminToken } from "../middleware/auth.middleware.js";
 
+
 const createRandomAlphaNum = (length = 12) => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let out = "";
