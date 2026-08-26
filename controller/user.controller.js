@@ -19,11 +19,122 @@ const parsePageLimit = (req) => {
 };
 
 const BLOCKED_MESSAGE = "You are blocked. Please contact support.";
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_DIGIT_COUNT = 10;
+const PINCODE_DIGIT_COUNT = 6;
+const MAX_CART_QTY = 20;
 
-const ensureActiveCustomer = async (email) => {
-  const normalizedEmail = String(email || "").trim().toLowerCase();
+const normalizePlainEmail = (value) => String(value || "").trim().toLowerCase();
+const normalizeFullName = (value) => String(value || "").replace(/\s+/g, " ").trim();
+const extractPhoneDigits = (value) => String(value || "").replace(/\D/g, "");
+const normalizeIndianPhone = (value) => {
+  let digits = extractPhoneDigits(value);
+  if (digits.startsWith("91") && digits.length === 12) digits = digits.slice(2);
+  if (digits.startsWith("0") && digits.length === 11) digits = digits.slice(1);
+  return digits;
+};
+const isValidEmailAddress = (value) => EMAIL_REGEX.test(normalizePlainEmail(value));
+const isValidIndianPhone = (value) => normalizeIndianPhone(value).length === PHONE_DIGIT_COUNT;
+const normalizePinCode = (value) => String(value || "").replace(/\D/g, "").slice(0, PINCODE_DIGIT_COUNT);
+const isValidPinCode = (value) => normalizePinCode(value).length === PINCODE_DIGIT_COUNT;
+const parseStrictPositiveInt = (value) => {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) return null;
+  return number;
+};
+const sanitizeAddressPayload = (payload = {}) => ({
+  FullName: normalizeFullName(payload.FullName),
+  phone1: normalizeIndianPhone(payload.phone1),
+  phone2: payload.phone2 ? normalizeIndianPhone(payload.phone2) : "",
+  email: normalizePlainEmail(payload.email),
+  country: String(payload.country || "India").trim(),
+  state: String(payload.state || "").trim(),
+  city: String(payload.city || "").trim(),
+  district: String(payload.district || "").trim(),
+  pinCode: normalizePinCode(payload.pinCode),
+  address: String(payload.address || "").trim(),
+  address_line2: String(payload.address_line2 || "").trim(),
+  addressType: String(payload.addressType || "Home").trim() || "Home",
+});
+const validateAddressPayload = (payload = {}) => {
+  const normalized = sanitizeAddressPayload(payload);
+  if (normalized.FullName.length < 2) {
+    return { ok: false, message: "Please enter a valid full name." };
+  }
+  if (!isValidIndianPhone(normalized.phone1)) {
+    return { ok: false, message: "Please enter a valid 10-digit phone number." };
+  }
+  if (normalized.phone2 && !isValidIndianPhone(normalized.phone2)) {
+    return { ok: false, message: "Alternate phone must be a valid 10-digit number." };
+  }
+  if (!normalized.address || normalized.address.length < 5) {
+    return { ok: false, message: "Please enter a complete delivery address." };
+  }
+  if (!normalized.city) {
+    return { ok: false, message: "City is required." };
+  }
+  if (!normalized.state) {
+    return { ok: false, message: "State is required." };
+  }
+  if (!normalized.country) {
+    return { ok: false, message: "Country is required." };
+  }
+  if (!isValidPinCode(normalized.pinCode)) {
+    return { ok: false, message: "Please enter a valid 6-digit pincode." };
+  }
+  return { ok: true, value: normalized };
+};
+const validateProfilePayload = ({ name = "", phone = "" } = {}) => {
+  const normalizedName = normalizeFullName(name);
+  const normalizedPhone = phone ? normalizeIndianPhone(phone) : "";
+  if (normalizedName && normalizedName.length < 2) {
+    return { ok: false, message: "Name must be at least 2 characters." };
+  }
+  if (normalizedPhone && !isValidIndianPhone(normalizedPhone)) {
+    return { ok: false, message: "Phone must be a valid 10-digit number." };
+  }
+  return {
+    ok: true,
+    value: {
+      name: normalizedName,
+      phone: normalizedPhone,
+    },
+  };
+};
+const normalizeCheckoutItems = (items = []) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return { ok: false, message: "Items required" };
+  }
+  const normalized = [];
+  for (const rawItem of items) {
+    const productId = Number(rawItem?.product_id);
+    const quantity = parseStrictPositiveInt(rawItem?.quantity);
+    if (!productId || Number.isNaN(productId)) {
+      return { ok: false, message: "Each item requires a valid product_id." };
+    }
+    if (!quantity || quantity > MAX_CART_QTY) {
+      return { ok: false, message: `Quantity must be between 1 and ${MAX_CART_QTY}.` };
+    }
+    normalized.push({
+      product_id: productId,
+      quantity,
+      size: String(rawItem?.size || "").trim(),
+      color: String(rawItem?.color || "").trim(),
+      price: Number(rawItem?.price || 0),
+    });
+  }
+  return { ok: true, items: normalized };
+};
+const assertOrderOwnership = (order, email) =>
+  normalizePlainEmail(order?.user_email) === normalizePlainEmail(email);
+
+const ensureActiveCustomer = async (email, options = {}) => {
+  const normalizedEmail = normalizePlainEmail(email);
   if (!normalizedEmail) return { ok: false, code: 401, message: "Email required (auth)" };
-  const profile = await Profile.findOne({ email: normalizedEmail })
+  if (!isValidEmailAddress(normalizedEmail)) {
+    return { ok: false, code: 400, message: "Please enter a valid email address." };
+  }
+  let profile = await Profile.findOne({ email: normalizedEmail })
     .select("isBlocked blockedReason")
     .lean();
   if (profile?.isBlocked) {
@@ -34,6 +145,13 @@ const ensureActiveCustomer = async (email) => {
         ? `You are blocked: ${String(profile.blockedReason).trim()}`
         : BLOCKED_MESSAGE,
     };
+  }
+  if (!profile && options.createIfMissing) {
+    await Profile.updateOne(
+      { email: normalizedEmail },
+      { $setOnInsert: { email: normalizedEmail, name: "" } },
+      { upsert: true }
+    );
   }
   return { ok: true, email: normalizedEmail };
 };
@@ -270,7 +388,7 @@ export const getProductReviews = async (req, res) => {
 
 // --- Cart helpers ---
 const normalizeCartId = (value) => String(value || "").trim();
-const normalizeEmail = (value) => String(value || "").trim();
+const normalizeEmail = (value) => normalizePlainEmail(value);
 const normalizeVariant = (value) => String(value || "").trim();
 const toPositiveInt = (value, fallback = 1) => {
   const n = Math.floor(Number(value));
@@ -459,6 +577,16 @@ export const saveUserCart = async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
     const incomingItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    for (const item of incomingItems) {
+      const productId = Number(item?.product_id);
+      const qty = parseStrictPositiveInt(item?.qty ?? item?.quantity);
+      if (!productId || Number.isNaN(productId)) {
+        return res.status(400).json({ status: false, message: "Each cart item requires a valid product_id." });
+      }
+      if (!qty || qty > MAX_CART_QTY) {
+        return res.status(400).json({ status: false, message: `Cart quantity must be between 1 and ${MAX_CART_QTY}.` });
+      }
+    }
     const cart = await resolveCart({
       cartId: req.body?.cart_id,
       email,
@@ -497,7 +625,10 @@ export const addToCart = async (req, res) => {
 
     const color = normalizeVariant(req.body?.color);
     const size = normalizeVariant(req.body?.size);
-    const qtyToAdd = toPositiveInt(req.body?.qty, 1);
+    const qtyToAdd = req.body?.qty == null ? 1 : parseStrictPositiveInt(req.body?.qty);
+    if (!qtyToAdd || qtyToAdd > MAX_CART_QTY) {
+      return res.status(400).json({ status: false, message: `Quantity must be between 1 and ${MAX_CART_QTY}.` });
+    }
     const product = await Products.findOne({ product_id: pid }).lean();
     if (!product) {
       return res.status(404).json({ status: false, message: "Product not found" });
@@ -582,6 +713,9 @@ export const updateCartItem = async (req, res) => {
     const qty = Number(req.body?.qty);
     if (!Number.isFinite(qty)) {
       return res.status(400).json({ status: false, message: "qty required" });
+    }
+    if (!Number.isInteger(qty) || qty < 0 || qty > MAX_CART_QTY) {
+      return res.status(400).json({ status: false, message: `Quantity must be between 0 and ${MAX_CART_QTY}.` });
     }
 
     const cart = await resolveCart({
@@ -669,7 +803,16 @@ export const updateUserProfile = async (req, res) => {
       return res.status(access.code).json({ status: false, message: access.message });
     }
 
-    const update = { email: access.email, name, phone };
+    const profileValidation = validateProfilePayload({ name, phone });
+    if (!profileValidation.ok) {
+      return res.status(400).json({ status: false, message: profileValidation.message });
+    }
+
+    const update = {
+      email: access.email,
+      name: profileValidation.value.name,
+      phone: profileValidation.value.phone,
+    };
     if (typeof gender === "string" && ["male", "female", "others"].includes(gender)) {
       update.gender = gender;
     }
@@ -1045,20 +1188,22 @@ export const createOrder = async (req, res) => {
     const { items = [], address_id, payment_method } = req.body || {};
     const email = String(req.user?.email || req.body?.email || "").trim().toLowerCase();
     const resolvedPaymentMethod = normalizePaymentMethod(payment_method);
-    const auth = await ensureActiveCustomer(email);
+    const auth = await ensureActiveCustomer(email, { createIfMissing: true });
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
     }
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ status: false, message: "Items required" });
+    const itemsValidation = normalizeCheckoutItems(items);
+    if (!itemsValidation.ok) {
+      return res.status(400).json({ status: false, message: itemsValidation.message });
     }
+    const normalizedItems = itemsValidation.items;
 
     // fetch product prices
-    const ids = items.map((i) => Number(i.product_id)).filter(Boolean);
+    const ids = normalizedItems.map((i) => Number(i.product_id)).filter(Boolean);
     const products = await Products.find({ product_id: { $in: ids } }).lean();
     const productMap = new Map(products.map((p) => [p.product_id, p]));
     const stockCheck = await validateCartItemsStock(
-      items.map((item) => ({
+      normalizedItems.map((item) => ({
         product_id: item.product_id,
         size: item.size || "",
         qty: item.quantity || 1,
@@ -1074,7 +1219,7 @@ export const createOrder = async (req, res) => {
       });
     }
     if (resolvedPaymentMethod === "COD") {
-      const codCheck = validateCodAvailability({ productMap: stockCheck.productMap || productMap, items });
+      const codCheck = validateCodAvailability({ productMap: stockCheck.productMap || productMap, items: normalizedItems });
       if (!codCheck.ok) {
         return res.status(codCheck.code || 400).json({ status: false, message: codCheck.message });
       }
@@ -1082,7 +1227,7 @@ export const createOrder = async (req, res) => {
 
     let amountPaise = 0;
     const orderItems = [];
-    for (const it of items) {
+    for (const it of normalizedItems) {
       const prod = productMap.get(Number(it.product_id));
       const itemSize = String(it.size || "").trim().toLowerCase();
       const itemColor = String(it.color || "").trim();
@@ -1121,8 +1266,11 @@ export const createOrder = async (req, res) => {
     }
 
     const addressDoc = address_id
-      ? await Addresses.findOne({ address_id: Number(address_id) })
+      ? await Addresses.findOne({ address_id: Number(address_id), email: auth.email })
       : null;
+    if (!addressDoc) {
+      return res.status(400).json({ status: false, message: "Please select a valid delivery address." });
+    }
 
     if (resolvedPaymentMethod === "COD") {
       const codChargeRupees = getCodChargeRupees();
@@ -1242,10 +1390,15 @@ export const confirmPayment = async (req, res) => {
       email = "",
     } = req.body || {};
     const resolvedEmail = String(req.user?.email || email || "").trim().toLowerCase();
-    const customerAccess = await ensureActiveCustomer(resolvedEmail);
+    const customerAccess = await ensureActiveCustomer(resolvedEmail, { createIfMissing: true });
     if (!customerAccess.ok) {
       return res.status(customerAccess.code).json({ status: false, message: customerAccess.message });
     }
+    const itemsValidation = normalizeCheckoutItems(items);
+    if (!itemsValidation.ok) {
+      return res.status(400).json({ status: false, message: itemsValidation.message });
+    }
+    const normalizedItems = itemsValidation.items;
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({ status: false, message: "Missing payment params" });
@@ -1258,7 +1411,7 @@ export const confirmPayment = async (req, res) => {
       return res.status(400).json({ status: false, message: "Signature mismatch" });
     }
     const stockCheck = await validateCartItemsStock(
-      (Array.isArray(items) ? items : []).map((item) => ({
+      normalizedItems.map((item) => ({
         product_id: item.product_id,
         size: item.size || "",
         qty: item.quantity || 1,
@@ -1277,13 +1430,13 @@ export const confirmPayment = async (req, res) => {
     let order = await Orders.findOne({ razorpay_order_id });
     let shouldNotifyOrderConfirmed = false;
     if (!order) {
-      const ids = Array.isArray(items) ? items.map((i) => Number(i.product_id)).filter(Boolean) : [];
+      const ids = normalizedItems.map((i) => Number(i.product_id)).filter(Boolean);
       const products = await Products.find({ product_id: { $in: ids } }).lean();
       const productMap = new Map(products.map((p) => [p.product_id, p]));
       const orderItems = [];
       let amountPaise = 0;
 
-      for (const it of items) {
+      for (const it of normalizedItems) {
         const prod = productMap.get(Number(it.product_id));
         const itemSize = String(it.size || "").trim().toLowerCase();
         const requestedPrice = Number(it.price || 0);
@@ -1314,8 +1467,11 @@ export const confirmPayment = async (req, res) => {
       }
 
       const addressDoc = address_id
-        ? await Addresses.findOne({ address_id: Number(address_id) })
+        ? await Addresses.findOne({ address_id: Number(address_id), email: customerAccess.email })
         : null;
+      if (!addressDoc) {
+        return res.status(400).json({ status: false, message: "Please select a valid delivery address." });
+      }
 
       const localOrderId = await generateUniqueOrderId();
       order = await Orders.create({
@@ -1352,6 +1508,9 @@ export const confirmPayment = async (req, res) => {
       shouldNotifyOrderConfirmed =
         String(order.status || "").toLowerCase() !== "confirmed" ||
         String(order.payment_status || "").toLowerCase() !== "paid";
+      if (!assertOrderOwnership(order, customerAccess.email)) {
+        return res.status(403).json({ status: false, message: "You cannot update this order." });
+      }
       order.payment_status = "paid";
       order.status = "confirmed";
       order.razorpay_payment_id = razorpay_payment_id;
@@ -1393,30 +1552,35 @@ export const updateUserAddress = async (req, res) => {
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
     }
+    const addressValidation = validateAddressPayload(req.body || {});
+    if (!addressValidation.ok) {
+      return res.status(400).json({ status: false, message: addressValidation.message });
+    }
     const { address_id, id, ...rest } = req.body || {};
     const addrId = Number(address_id ?? id);
     if (!addrId || Number.isNaN(addrId)) {
       return res.status(400).json({ status: false, message: "address_id required" });
     }
+    const normalized = addressValidation.value;
     const updated = await Addresses.findOneAndUpdate(
-      { address_id: addrId },
+      { address_id: addrId, email: auth.email },
       {
-        full_name: rest.FullName,
-        phone: rest.phone1,
-        alt_phone: rest.phone2,
-        address_line1: rest.address,
-        address_line2: rest.address_line2 || "",
-        city: rest.city,
-        district: rest.district || "",
-        state: rest.state,
-        postal_code: rest.pinCode,
-        country: rest.country,
-        FullName: rest.FullName,
-        phone1: rest.phone1,
-        phone2: rest.phone2,
-        pinCode: rest.pinCode,
-        address: rest.address,
-        addressType: rest.addressType,
+        full_name: normalized.FullName,
+        phone: normalized.phone1,
+        alt_phone: normalized.phone2,
+        address_line1: normalized.address,
+        address_line2: normalized.address_line2,
+        city: normalized.city,
+        district: normalized.district,
+        state: normalized.state,
+        postal_code: normalized.pinCode,
+        country: normalized.country,
+        FullName: normalized.FullName,
+        phone1: normalized.phone1,
+        phone2: normalized.phone2,
+        pinCode: normalized.pinCode,
+        address: normalized.address,
+        addressType: normalized.addressType,
       },
       { new: true }
     );
@@ -1485,32 +1649,40 @@ export const getUserAddresses = async (req, res) => {
 export const createNewAddress = async (req, res) => {
   try {
     const payload = req.body || {};
-    const auth = await ensureActiveCustomer(payload.email);
+    const auth = await ensureActiveCustomer(req.user?.email || payload.email, { createIfMissing: true });
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
     }
+    const addressValidation = validateAddressPayload({
+      ...payload,
+      email: auth.email,
+    });
+    if (!addressValidation.ok) {
+      return res.status(400).json({ status: false, message: addressValidation.message });
+    }
+    const normalized = addressValidation.value;
     if (!payload.address_id) {
       payload.address_id = await getNextSequence("address_id");
     }
     const addr = await Addresses.create({
       address_id: payload.address_id,
-      full_name: payload.FullName,
+      full_name: normalized.FullName,
       email: auth.email,
-      phone: payload.phone1,
-      alt_phone: payload.phone2,
-      address_line1: payload.address || "",
-      address_line2: payload.address_line2 || "",
-      city: payload.city,
-      district: payload.district || "",
-      state: payload.state,
-      postal_code: payload.pinCode,
-      country: payload.country || "India",
-      FullName: payload.FullName,
-      phone1: payload.phone1,
-      phone2: payload.phone2,
-      pinCode: payload.pinCode,
-      address: payload.address,
-      addressType: payload.addressType,
+      phone: normalized.phone1,
+      alt_phone: normalized.phone2,
+      address_line1: normalized.address,
+      address_line2: normalized.address_line2,
+      city: normalized.city,
+      district: normalized.district,
+      state: normalized.state,
+      postal_code: normalized.pinCode,
+      country: normalized.country,
+      FullName: normalized.FullName,
+      phone1: normalized.phone1,
+      phone2: normalized.phone2,
+      pinCode: normalized.pinCode,
+      address: normalized.address,
+      addressType: normalized.addressType,
     });
     const shaped = {
       id: addr.address_id,
@@ -1542,7 +1714,7 @@ export const createNewAddress = async (req, res) => {
 export const cancelOrder = async (req, res) => {
   try {
     const { order_id, id, reason, refund_upi_id } = req.body || {};
-    const auth = await ensureActiveCustomer(req.body?.email);
+    const auth = await ensureActiveCustomer(req.user?.email || req.body?.email);
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
     }
@@ -1559,6 +1731,9 @@ export const cancelOrder = async (req, res) => {
     const order = await Orders.findOne(query);
     if (!order) {
       return res.status(404).json({ status: false, message: "Order not found" });
+    }
+    if (!assertOrderOwnership(order, auth.email)) {
+      return res.status(403).json({ status: false, message: "You cannot cancel this order." });
     }
 
     const finalStatuses = ["cancelled", "rejected", "delivered", "rto", "refund", "refunded", "return"];
@@ -1617,7 +1792,7 @@ export const cancelOrder = async (req, res) => {
 export const returnOrder = async (req, res) => {
   try {
     const { order_id, id, reason, refund_upi_id } = req.body || {};
-    const auth = await ensureActiveCustomer(req.body?.email);
+    const auth = await ensureActiveCustomer(req.user?.email || req.body?.email);
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
     }
@@ -1628,6 +1803,9 @@ export const returnOrder = async (req, res) => {
     const order = await Orders.findOne(query);
     if (!order) {
       return res.status(404).json({ status: false, message: "Order not found" });
+    }
+    if (!assertOrderOwnership(order, auth.email)) {
+      return res.status(403).json({ status: false, message: "You cannot return this order." });
     }
     const status = String(order.status || "").toLowerCase();
     if (status !== "delivered") {

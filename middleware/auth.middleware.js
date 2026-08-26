@@ -91,3 +91,56 @@ export const requireUserSession = async (req, res, next) => {
   }
 };
 
+const isLikelyEmail = (value) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim().toLowerCase());
+
+export const requireCheckoutSessionOrEmail = async (req, res, next) => {
+  try {
+    const auth = String(req.headers.authorization || "").trim();
+    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+    const bodyEmail = String(req.body?.email || "").trim().toLowerCase();
+
+    if (token) {
+      const now = new Date();
+      const session = await UserSession.findOne({
+        session_id: token,
+        $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+      })
+        .select("email session_id expiresAt")
+        .lean();
+
+      if (!session?.email) {
+        return res.status(401).json({ status: false, message: "Session expired or invalid" });
+      }
+
+      if (bodyEmail && bodyEmail !== String(session.email).toLowerCase()) {
+        return res.status(403).json({ status: false, message: "Email/token mismatch" });
+      }
+
+      req.user = {
+        email: String(session.email).toLowerCase(),
+        sessionId: String(session.session_id || ""),
+        isGuestCheckout: false,
+      };
+      return next();
+    }
+
+    if (!bodyEmail || !isLikelyEmail(bodyEmail)) {
+      return res.status(401).json({
+        status: false,
+        message: "Valid email is required for guest checkout",
+      });
+    }
+
+    req.user = {
+      email: bodyEmail,
+      sessionId: "",
+      isGuestCheckout: true,
+    };
+    next();
+  } catch (error) {
+    console.error("requireCheckoutSessionOrEmail error:", error);
+    return res.status(500).json({ status: false, message: "Checkout auth middleware failed" });
+  }
+};
+

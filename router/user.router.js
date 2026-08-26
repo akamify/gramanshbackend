@@ -32,7 +32,7 @@ import {
   submitContactForm,
 } from "../controller/user.controller.js";
 import { upload } from "../middleware/multer.middleware.js";
-import { requireUserSession } from "../middleware/auth.middleware.js";
+import { requireCheckoutSessionOrEmail, requireUserSession } from "../middleware/auth.middleware.js";
 import { paymentRateLimit } from "../middleware/rateLimit.middleware.js";
 
 const router = Router();
@@ -55,13 +55,13 @@ router.get("/remove-cart-by-product/:productId", removeCartByProduct);
 router.post("/update-cart-item", updateCartItem);
 router.post("/clear-cart", clearCart);
 router.post("/get-user-addresess", requireUserSession, getUserAddresses);
-router.post("/create-newAddress", requireUserSession, createNewAddress);
+router.post("/create-newAddress", requireCheckoutSessionOrEmail, createNewAddress);
 router.patch("/update-user-address", requireUserSession, updateUserAddress);
 router.post("/get-user-profile", requireUserSession, getUserProfile);
 router.post("/update-user-profile", requireUserSession, updateUserProfile);
 router.post("/get-orders", requireUserSession, getUserOrders);
-router.post("/create-order", requireUserSession, paymentRateLimit, createOrder);
-router.post("/payment-success", requireUserSession, paymentRateLimit, confirmPayment);
+router.post("/create-order", requireCheckoutSessionOrEmail, paymentRateLimit, createOrder);
+router.post("/payment-success", requireCheckoutSessionOrEmail, paymentRateLimit, confirmPayment);
 router.post("/cancel-order", requireUserSession, cancelOrder);
 router.post("/return-order", requireUserSession, returnOrder);
 router.post("/order-reminder/qstash", sendOrderReminderFromQstash);

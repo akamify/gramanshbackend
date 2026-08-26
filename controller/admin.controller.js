@@ -288,14 +288,20 @@ const shapePublicProductCard = (product) => {
   const productImages = Array.isArray(product?.product_image) ? product.product_image.filter(Boolean) : [];
   const thumbnail = productImages[0] || firstVariant?.image || variantImages[0] || "";
   const variants = Array.isArray(product?.variants)
-    ? product.variants.map((variant) => ({
-        label: String(variant?.label || ""),
-        stock: Math.max(0, Number(variant?.stock || 0)),
-        price: Number(variant?.price || 0),
-        originalPrice: Number(variant?.originalPrice || 0) || undefined,
-        image: String(variant?.image || ""),
-        images: Array.isArray(variant?.images) ? variant.images.filter(Boolean).slice(0, 4) : [],
-      }))
+    ? product.variants.map((variant) => {
+        const sellingPrice = Number((variant?.selling_price ?? variant?.price) || 0);
+        const originalPrice = Number(variant?.originalPrice || variant?.price || 0) || undefined;
+        return {
+          label: String(variant?.label || ""),
+          stock: Math.max(0, Number(variant?.stock || 0)),
+          price: sellingPrice,
+          originalPrice:
+            typeof originalPrice === "number" && originalPrice > sellingPrice ? originalPrice : undefined,
+          selling_price: sellingPrice,
+          image: String(variant?.image || ""),
+          images: Array.isArray(variant?.images) ? variant.images.filter(Boolean).slice(0, 4) : [],
+        };
+      })
     : [];
 
   return {
