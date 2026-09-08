@@ -28,11 +28,13 @@ import {
   parseSearchQuery,
   buildTokenRegex,
 } from "../utils/search.js";
+
 import {
   notifySubscribersInstagramPost,
   notifySubscribersProductInStock,
   notifySubscribersProductUploaded,
 } from "../utils/subscriberNotifications.js";
+
 import {
   notifyProductWaitlistIfRestocked,
   resetProductWaitlistIfOutOfStock,
